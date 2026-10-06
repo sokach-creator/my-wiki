@@ -444,40 +444,48 @@ async function viewEditor(slug, presetQuery) {
     location.reload();
   });
 
-  // 保存
-  document.getElementById('editorForm').addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const pwdEl = document.getElementById('pwdInput');
-    if (pwdEl && pwdEl.value) localStorage.setItem('wiki_edit_pwd', pwdEl.value);
-
-    const payload = {
-      title: document.getElementById('titleInput').value.trim(),
-      category: document.getElementById('catInput').value.trim(),
-      content: contentInput.value.trim(),
-      author: document.getElementById('authorInput').value.trim(),
-    };
-    if (!payload.title || !payload.content) { toast('标题和正文都不能为空', true); return; }
-    if (payload.author) localStorage.setItem('wiki_author', payload.author);
-
-    const send = () => isEdit
-      ? api('/articles/' + encodeURIComponent(slug), { method: 'PUT', body: JSON.stringify(payload) })
-      : api('/articles', { method: 'POST', body: JSON.stringify(payload) });
-
+  // 保存（带防重复提交保护）
+  let saving = false;
+  async function doSave() {
+    if (saving) return;
+    saving = true;
+    const btn = document.querySelector('#editorForm button[type="submit"]');
+    if (btn) { btn.disabled = true; btn.dataset.orig = btn.textContent; btn.textContent = '⏳ 保存中…'; }
+    const unlock = () => { saving = false; if (btn) { btn.disabled = false; btn.textContent = btn.dataset.orig || '💾 保存'; } };
     try {
-      const r = await send();
+      const pwdEl = document.getElementById('pwdInput');
+      if (pwdEl && pwdEl.value) localStorage.setItem('wiki_edit_pwd', pwdEl.value);
+      const payload = {
+        title: document.getElementById('titleInput').value.trim(),
+        category: document.getElementById('catInput').value.trim(),
+        content: contentInput.value.trim(),
+        author: document.getElementById('authorInput').value.trim(),
+      };
+      if (!payload.title || !payload.content) { toast('标题和正文都不能为空', true); unlock(); return; }
+      if (payload.author) localStorage.setItem('wiki_author', payload.author);
+
+      const r = isEdit
+        ? await api('/articles/' + encodeURIComponent(slug), { method: 'PUT', body: JSON.stringify(payload) })
+        : await api('/articles', { method: 'POST', body: JSON.stringify(payload) });
+      unlock();
       localStorage.removeItem(draftKey);
       toast(r.message || '已保存');
       location.hash = '#/article/' + encodeURIComponent(r.slug || slug);
     } catch (err) {
       if (err.needPassword) {
+        unlock();
         const pwd = prompt('本站已开启编辑口令，请输入：');
         if (!pwd) return;
         localStorage.setItem('wiki_edit_pwd', pwd);
-        e.target.requestSubmit();
-        return;
+        return doSave();
       }
-      toast(err.message, true);
+      toast(err.message || '保存失败', true);
+      unlock();
     }
+  }
+  document.getElementById('editorForm').addEventListener('submit', (e) => {
+    e.preventDefault();
+    doSave();
   });
 
   if (presetQuery && !isEdit) {
@@ -512,7 +520,7 @@ async function render() {
   } catch (e) {
     $app.innerHTML = '<div class="card"><h1 class="page-title">出错了</h1><p style="margin:14px 0">' +
       esc(e.message || String(e)) + '</p>' +
-      '<p style="color:var(--muted);font-size:13px">如果提示数据库相关错误，请检查 Cloudflare Pages 的 D1 绑定（变量名必须为 DB），详见项目 README。</p>' +
+      '<p style="color:var(--muted);font-size:13px">请先刷新页面重试。若反复出现数据库相关错误，请检查 wrangler.jsonc 中的 D1 绑定（变量名必须为 DB）。</p>' +
       '<a class="btn btn-primary" href="#/">返回首页</a></div>';
   }
 }
