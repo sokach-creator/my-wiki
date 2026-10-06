@@ -44,11 +44,86 @@ function toast(msg, isError) {
   toast._timer = setTimeout(() => { t.hidden = true; }, 2600);
 }
 
+// ---------------- 图片：客户端压缩 + 上传 ----------------
+// 上传前先在浏览器里压缩（最长边 1600px、优先 WebP），体积通常降 70~90%
+const IMG_MAX_EDGE = 1600;
+const IMG_UPLOAD_LIMIT = 15 * 1024 * 1024; // 原图 15MB 以上直接拒收
+
+async function compressImage(file) {
+  if (file.type === 'image/gif') return file; // 动图不压缩，保留原样
+  let bmp;
+  try {
+    bmp = await createImageBitmap(file, { imageOrientation: 'from-image' });
+  } catch { return file; } // 解码失败就原样上传，由服务端校验
+  const scale = Math.min(1, IMG_MAX_EDGE / Math.max(bmp.width, bmp.height));
+  const w = Math.max(1, Math.round(bmp.width * scale));
+  const h = Math.max(1, Math.round(bmp.height * scale));
+  const canvas = document.createElement('canvas');
+  canvas.width = w; canvas.height = h;
+  canvas.getContext('2d').drawImage(bmp, 0, 0, w, h);
+  if (bmp.close) bmp.close();
+  let blob = await new Promise((res) => canvas.toBlob(res, 'image/webp', 0.8));
+  let mime = 'image/webp';
+  if (!blob || blob.type !== 'image/webp') { // 旧浏览器不支持 WebP 编码则退 JPEG
+    blob = await new Promise((res) => canvas.toBlob(res, 'image/jpeg', 0.78));
+    mime = 'image/jpeg';
+  }
+  if (!blob) return file;
+  const base = (file.name || 'image').replace(/\.[^.]+$/, '');
+  const out = new File([blob], base + (mime === 'image/webp' ? '.webp' : '.jpg'), { type: mime });
+  return out.size < file.size ? out : file; // 压缩反而变大（小图）就保留原图
+}
+
+function uploadImage(file, onProgress) {
+  return new Promise((resolve, reject) => {
+    const fd = new FormData();
+    fd.append('file', file, file.name || 'image');
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', '/api/images');
+    const pwd = localStorage.getItem('wiki_edit_pwd');
+    if (pwd) xhr.setRequestHeader('X-Edit-Password', pwd);
+    if (onProgress) {
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable) onProgress(Math.round((e.loaded / e.total) * 100));
+      };
+    }
+    xhr.onload = () => {
+      let data = {};
+      try { data = JSON.parse(xhr.responseText || '{}'); } catch { /* 忽略 */ }
+      if (xhr.status >= 200 && xhr.status < 300) return resolve(data);
+      const err = new Error(data.error || ('上传失败（HTTP ' + xhr.status + '）'));
+      err.status = xhr.status;
+      err.needPassword = !!data.needPassword;
+      reject(err);
+    };
+    xhr.onerror = () => reject(new Error('网络错误，上传失败'));
+    xhr.send(fd);
+  });
+}
+
+// 上传（自动处理首次输入编辑口令）
+async function tryUpload(file, onProgress) {
+  try {
+    return await uploadImage(file, onProgress);
+  } catch (err) {
+    if (err.needPassword) {
+      const pwd = prompt('本站已开启编辑口令，请输入：');
+      if (!pwd) throw err;
+      localStorage.setItem('wiki_edit_pwd', pwd);
+      return uploadImage(file, onProgress);
+    }
+    throw err;
+  }
+}
+
 // ---------------- Markdown 渲染（安全：先转义再解析） ----------------
 function mdInline(s) {
   s = s.replace(/`([^`]+)`/g, (m, c) => '<code>' + c + '</code>');
   s = s.replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, (m, alt, src) => {
-    if (/^(https?:)?\/\//.test(src)) return '<img src="' + src + '" alt="' + alt + '" loading="lazy">';
+    // 支持网络图片和本站上传的图片（/api/images/xx）
+    if (/^(https?:)?\/\//.test(src) || /^\/api\/images\//.test(src)) {
+      return '<img src="' + src + '" alt="' + alt + '" loading="lazy">';
+    }
     return m;
   });
   s = s.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (m, txt, href) => {
@@ -375,10 +450,13 @@ async function viewEditor(slug, presetQuery) {
         '<button type="button" data-md="bold">加粗</button>' +
         '<button type="button" data-md="h2">标题</button>' +
         '<button type="button" data-md="link">链接</button>' +
+        '<button type="button" id="imgBtn" title="上传图片：也可直接把截图粘贴或拖拽进编辑框">图片</button>' +
         '<button type="button" data-md="ul">列表</button>' +
         '<button type="button" data-md="quote">引用</button>' +
         '<button type="button" data-md="code">代码块</button>' +
         '<button type="button" data-md="hr">分隔线</button>' +
+        '<span class="img-status" id="imgStatus" hidden></span>' +
+        '<input type="file" id="imgInput" accept="image/jpeg,image/png,image/webp,image/gif" multiple hidden>' +
       '</div>' +
       '<div class="editor-cols">' +
         '<textarea id="contentInput" required placeholder="在这里写正文…&#10;&#10;支持 Markdown：# 标题、**加粗**、- 列表、[链接](网址)">' + esc(a.content) + '</textarea>' +
@@ -406,6 +484,7 @@ async function viewEditor(slug, presetQuery) {
   // 工具栏
   document.querySelectorAll('.editor-toolbar button').forEach((btn) => {
     btn.addEventListener('click', () => {
+      if (!btn.dataset.md) return; // 图片按钮等无 data-md 的按钮单独处理
       const ins = {
         bold: ['**', '**'], h2: ['\n## ', '\n'], ul: ['- ', ''], quote: ['> ', ''],
         code: ['\n```\n', '\n```\n'], hr: ['\n---\n', ''],
@@ -416,6 +495,57 @@ async function viewEditor(slug, presetQuery) {
       contentInput.setRangeText(ins[0] + sel + ins[1], s, e, 'end');
       contentInput.focus();
       updatePreview();
+    });
+  });
+
+  // 图片上传：按钮选择 / 截图粘贴 / 拖拽，三种方式统一走这里
+  const imgStatus = document.getElementById('imgStatus');
+  const showImgStatus = (text) => {
+    if (!text) { imgStatus.hidden = true; return; }
+    imgStatus.textContent = text;
+    imgStatus.hidden = false;
+  };
+  const insertAtCursor = (text) => {
+    const s = contentInput.selectionStart, e = contentInput.selectionEnd;
+    contentInput.setRangeText(text, s, e, 'end');
+    contentInput.dispatchEvent(new Event('input')); // 触发预览刷新和草稿保存
+    contentInput.focus();
+  };
+  async function handleImageFiles(fileList) {
+    const files = Array.from(fileList || []);
+    if (!files.length) return;
+    for (const f of files) {
+      if (!/^image\//.test(f.type)) { toast('「' + f.name + '」不是图片文件', true); continue; }
+      if (f.size > IMG_UPLOAD_LIMIT) { toast('「' + f.name + '」超过 15MB，请先缩小后再上传', true); continue; }
+      try {
+        showImgStatus('⏳ 压缩中…');
+        const up = await compressImage(f);
+        const r = await tryUpload(up, (p) => showImgStatus('⏳ 上传中 ' + p + '%'));
+        const alt = (up.name || '图片').replace(/\.[^.]+$/, '');
+        insertAtCursor((contentInput.value && !contentInput.value.endsWith('\n') ? '\n' : '') + '![' + esc(alt) + '](' + r.url + ')\n');
+        showImgStatus('');
+        toast('图片已插入（' + Math.round(r.size / 1024) + 'KB）');
+      } catch (err) {
+        showImgStatus('');
+        toast(err.message || '图片上传失败', true);
+      }
+    }
+  }
+  document.getElementById('imgBtn').addEventListener('click', () => document.getElementById('imgInput').click());
+  document.getElementById('imgInput').addEventListener('change', (e) => {
+    handleImageFiles(e.target.files);
+    e.target.value = ''; // 允许重复选择同一文件
+  });
+  contentInput.addEventListener('paste', (e) => {
+    const files = e.clipboardData && e.clipboardData.files;
+    if (files && files.length) { e.preventDefault(); handleImageFiles(files); }
+  });
+  ['dragover', 'drop'].forEach((ev) => {
+    contentInput.addEventListener(ev, (e) => {
+      const files = e.dataTransfer && e.dataTransfer.files;
+      if (!files || !files.length) return;
+      e.preventDefault();
+      if (ev === 'drop') handleImageFiles(files);
     });
   });
 
@@ -526,6 +656,24 @@ async function render() {
 }
 
 window.addEventListener('hashchange', render);
+
+// 图片灯箱：点击正文/预览里的图片放大查看（Esc 或点击任意处关闭）
+document.addEventListener('click', (e) => {
+  const img = e.target.closest('.article-body img, .preview-pane img');
+  if (!img) return;
+  const lb = document.createElement('div');
+  lb.className = 'img-lightbox';
+  const big = document.createElement('img');
+  big.src = img.src;
+  big.alt = img.alt || '';
+  lb.appendChild(big);
+  lb.addEventListener('click', () => lb.remove());
+  document.body.appendChild(lb);
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') document.querySelectorAll('.img-lightbox').forEach((x) => x.remove());
+});
+
 document.getElementById('searchForm').addEventListener('submit', (e) => {
   e.preventDefault();
   const q = document.getElementById('searchInput').value.trim();
