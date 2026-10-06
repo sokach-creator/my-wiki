@@ -175,15 +175,26 @@ async function handleApi(request, env, seg) {
       if (!title || !content.trim()) return json({ error: '标题和正文不能为空' }, 400);
       const category = String(body.category || '').trim() || '未分类';
       const author = String(body.author || '').trim().slice(0, 60);
+      // 原子化创建：直接插入；若地址冲突（如双击重复提交）则换随机地址重试
       let slug = makeSlug(title);
-      for (let i = 0; i < 5; i++) {
-        const exists = await DB.prepare('SELECT id FROM articles WHERE slug = ?').bind(slug).first();
-        if (!exists) break;
-        slug = 'p' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+      let ok = false;
+      for (let i = 0; i < 6; i++) {
+        try {
+          await DB.prepare(
+            'INSERT INTO articles (slug, title, category, content, author, created_at, updated_at) VALUES (?,?,?,?,?,?,?)'
+          ).bind(slug, title, category, content, author, nowCN(), nowCN()).run();
+          ok = true;
+          break;
+        } catch (e) {
+          const msg = String(e && e.message || e);
+          if (/UNIQUE|CONSTRAINT/i.test(msg)) {
+            slug = 'p' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+            continue;
+          }
+          throw e;
+        }
       }
-      await DB.prepare(
-        'INSERT INTO articles (slug, title, category, content, author, created_at, updated_at) VALUES (?,?,?,?,?,?,?)'
-      ).bind(slug, title, category, content, author, nowCN(), nowCN()).run();
+      if (!ok) return json({ error: '创建失败：地址生成冲突，请重试' }, 500);
       return json({ ok: true, slug, message: '创建成功' }, 201);
     }
 
