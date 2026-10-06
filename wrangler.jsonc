@@ -1,0 +1,21 @@
+﻿{
+  // ★ 项目名：必须和 Cloudflare 上的项目名一致（日志里显示的是 my-wiki）
+  "name": "my-wiki",
+  "compatibility_date": "2026-10-01",
+  // 后端代码位置
+  "main": "worker/index.js",
+  // 静态资源目录 + ASSETS 绑定（worker 里用来返回网页文件）
+  "assets": {
+    "directory": "public",
+    "binding": "ASSETS"
+  },
+  // ★ 数据库绑定：把 database_id 替换成你自己的（否则部署会失败）
+  // 获取方法：Cloudflare 后台 → 存储和数据库 → D1 SQL 数据库 → 打开 wiki-db → 复制「数据库 ID」
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "wiki-db",
+      "database_id": "cc6c0e1f-d429-408d-91ce-a0534b5159c4"
+    }
+  ]
+}
