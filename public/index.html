@@ -5,6 +5,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>我的百科档案馆</title>
   <link rel="stylesheet" href="/style.css">
+  <!-- 资源预加载：HTML 一到就开始请求接口，不必等 JS 下载执行，高延迟线路省 1 个来回 -->
+  <link rel="preload" href="/api/stats" as="fetch" crossorigin>
+  <link rel="preload" href="/api/articles" as="fetch" crossorigin>
+  <link rel="preload" href="/api/categories" as="fetch" crossorigin>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='18' fill='%235c1f1f'/%3E%3Cpath d='M25 30h20a8 8 0 0 1 5 2 8 8 0 0 1 5-2h20v38H55a8 8 0 0 0-5 2 8 8 0 0 0-5-2H25z M50 32v36' stroke='%23f5e9d0' stroke-width='5' fill='none' stroke-linejoin='round'/%3E%3C/svg%3E">
 </head>
 <body>
