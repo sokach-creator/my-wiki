@@ -366,6 +366,30 @@ a.wiki-link.new { color: #ba2200; }
 .back-link { font-size: 13.5px; color: var(--muted); text-decoration: none; display: inline-block; margin-top: 10px; }
 .back-link:hover { color: var(--link); }
 
+/* ---------- 图片上传与展示 ---------- */
+.article-body img { height: auto; cursor: zoom-in; margin: 6px 0; box-shadow: 0 1px 6px rgba(0,0,0,.12); }
+.editor-cols .preview-pane img { max-width: 100%; height: auto; border-radius: 4px; cursor: zoom-in; }
+.img-status {
+  align-self: center;
+  font-size: 12.5px;
+  color: #8a5a1e;
+  background: #fdf3e0;
+  border: 1px solid #ecd9b0;
+  border-radius: 20px;
+  padding: 2px 10px;
+}
+.img-lightbox {
+  position: fixed; inset: 0;
+  background: rgba(20, 15, 12, .86);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 999; cursor: zoom-out; padding: 20px;
+}
+.img-lightbox img {
+  max-width: 96vw; max-height: 92vh;
+  border-radius: 10px;
+  box-shadow: 0 12px 48px rgba(0,0,0,.55);
+}
+
 /* ---------- 响应式 ---------- */
 @media (max-width: 860px) {
   .header-inner { gap: 10px; }
