@@ -1,0 +1,6 @@
+# 静态资源浏览器缓存 4 小时：回访用户无需重新下载，提速明显
+# index.html 不缓存，保证内容更新即时生效
+/app.js
+  Cache-Control: public, max-age=14400
+/style.css
+  Cache-Control: public, max-age=14400
