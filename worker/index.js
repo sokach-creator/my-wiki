@@ -49,6 +49,15 @@ async function ensureSchema(DB) {
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
   )`).bind().run();
+  // 图片表：二进制直接存 D1（免配置对象存储），article_slug 用于条目删除时级联清理
+  await DB.prepare(`CREATE TABLE IF NOT EXISTS images (
+    id TEXT PRIMARY KEY,
+    mime TEXT NOT NULL,
+    bytes BLOB NOT NULL,
+    size INTEGER NOT NULL,
+    article_slug TEXT,
+    ts INTEGER NOT NULL
+  )`).bind().run();
   const row = await DB.prepare('SELECT COUNT(*) AS n FROM articles').bind().first();
   if (!row || !row.n) {
     for (const a of SEED_ARTICLES) {
@@ -128,12 +137,33 @@ const SEED_ARTICLES = [
 ## 链接与图片
 
 - 链接：\`[文字](https://example.com)\`
-- 图片：\`![说明](图片地址)\`（支持网络图片）`,
+- **插图**：点击编辑框上方「图片」按钮选择图片，或**直接把截图粘贴 / 拖拽进编辑框**，会自动压缩并插入
+- 也可以手写 Markdown 使用网络图片：\`![说明](图片地址)\`
+
+> 手机照片和截图会被自动压缩（最长边 1600px、优先转 WebP），既省流量又加快打开速度。`,
   },
 ];
 
+// ---------------- 图片辅助：引用提取 / 孤儿清理 ----------------
+function extractImageIds(content) {
+  const set = new Set();
+  const re = /\/api\/images\/([A-Za-z0-9_-]+)/g;
+  const s = String(content || '');
+  let m;
+  while ((m = re.exec(s))) set.add(m[1]);
+  return [...set];
+}
+
+// 清理：从未随条目保存的图片（上传后放弃编辑）48 小时后回收
+async function imageJanitor(DB) {
+  try {
+    await DB.prepare('DELETE FROM images WHERE article_slug IS NULL AND ts < ?')
+      .bind(Date.now() - 48 * 3600 * 1000).run();
+  } catch { /* 清理失败不影响主流程 */ }
+}
+
 // ---------------- API 路由 ----------------
-async function handleApi(request, env, seg) {
+async function handleApi(request, env, seg, ctx) {
   const DB = env.DB;
   const method = request.method;
 
@@ -195,6 +225,14 @@ async function handleApi(request, env, seg) {
         }
       }
       if (!ok) return json({ error: '创建失败：地址生成冲突，请重试' }, 500);
+      // 认领正文中引用的图片（归属到本条目，便于级联删除）
+      const ids = extractImageIds(content);
+      if (ids.length) {
+        await DB.prepare(
+          `UPDATE images SET article_slug = ? WHERE article_slug IS NULL AND id IN (${ids.map(() => '?').join(',')})`
+        ).bind(slug, ...ids).run();
+      }
+      imageJanitor(DB);
       return json({ ok: true, slug, message: '创建成功' }, 201);
     }
 
@@ -218,10 +256,23 @@ async function handleApi(request, env, seg) {
       await DB.prepare(
         'UPDATE articles SET title=?, category=?, content=?, author=?, updated_at=? WHERE slug=?'
       ).bind(title, category, content, author, nowCN(), slug).run();
+      // 认领新引用的图片，并删除本条目不再引用的旧图片
+      const ids = extractImageIds(content);
+      if (ids.length) {
+        await DB.prepare(
+          `UPDATE images SET article_slug = ? WHERE article_slug IS NULL AND id IN (${ids.map(() => '?').join(',')})`
+        ).bind(slug, ...ids).run();
+      }
+      await DB.prepare(
+        `DELETE FROM images WHERE article_slug = ?${ids.length ? ` AND id NOT IN (${ids.map(() => '?').join(',')})` : ''}`
+      ).bind(...[slug, ...ids]).run();
+      imageJanitor(DB);
       return json({ ok: true, slug, message: '保存成功' });
     }
     if (method === 'DELETE') {
-      const r = await DB.prepare('DELETE FROM articles WHERE slug = ?').bind(slug).run();
+      await DB.prepare('DELETE FROM articles WHERE slug = ?').bind(slug).run();
+      // 级联清理本条目上传的图片
+      await DB.prepare('DELETE FROM images WHERE article_slug = ?').bind(slug).run();
       return json({ ok: true, message: '已删除' });
     }
   }
@@ -257,12 +308,70 @@ async function handleApi(request, env, seg) {
     return json({ categories: r.results || [] });
   }
 
+  // ---------- /api/images ----------
+  if (seg[0] === 'images') {
+    // 上传（写口令校验已在函数开头统一处理）
+    if (!seg[1] && method === 'POST') {
+      const cl = Number(request.headers.get('content-length') || 0);
+      if (cl > 6_000_000) return json({ error: '图片太大：请上传 4MB 以内的图片（正常手机照片会自动压缩）' }, 413);
+      let form;
+      try { form = await request.formData(); } catch { return json({ error: '上传数据格式错误' }, 400); }
+      const file = form.get('file');
+      if (!file || typeof file === 'string') return json({ error: '缺少图片文件' }, 400);
+      const ALLOWED = { 'image/jpeg': 1, 'image/png': 1, 'image/webp': 1, 'image/gif': 1 };
+      if (!ALLOWED[file.type]) return json({ error: '仅支持 JPG / PNG / WebP / GIF 图片' }, 415);
+      if (file.size > 1_800_000) return json({ error: '图片超过 1.5MB（客户端压缩失败或原图过大），请换小一点的图' }, 413);
+      const buf = new Uint8Array(await file.arrayBuffer());
+      let id = '';
+      for (let i = 0; i < 5 && !id; i++) {
+        const candidate = Math.random().toString(36).slice(2, 8) + Date.now().toString(36).slice(-4);
+        const hit = await DB.prepare('SELECT id FROM images WHERE id = ?').bind(candidate).first();
+        if (!hit) id = candidate;
+      }
+      if (!id) return json({ error: '生成图片编号失败，请重试' }, 500);
+      await DB.prepare('INSERT INTO images (id, mime, bytes, size, article_slug, ts) VALUES (?,?,?,?,NULL,?)')
+        .bind(id, file.type, buf, file.size, Date.now()).run();
+      return json({ ok: true, id, url: '/api/images/' + id, mime: file.type, size: file.size }, 201);
+    }
+
+    // 读取：先查边缘缓存，再查数据库（id 唯一 → 浏览器与边缘均可永久缓存）
+    if (seg[1] && method === 'GET') {
+      const id = seg[1];
+      const base = new URL(request.url);
+      const target = new URL(base.origin + '/api/images/' + encodeURIComponent(id));
+      const cache = (typeof caches !== 'undefined' && caches.default) ? caches.default : null;
+      if (cache) {
+        try {
+          const hit = await cache.match(target);
+          if (hit) return hit;
+        } catch { /* 缓存读取失败则回源 */ }
+      }
+      const r = await DB.prepare('SELECT mime, bytes FROM images WHERE id = ?').bind(id).first();
+      if (!r || !r.bytes) return json({ error: '图片不存在' }, 404);
+      const resp = new Response(r.bytes, {
+        status: 200,
+        headers: {
+          'Content-Type': r.mime || 'application/octet-stream',
+          'Cache-Control': 'public, max-age=31536000, immutable',
+          ...CORS,
+        },
+      });
+      if (cache) {
+        try {
+          const put = cache.put(target, resp.clone());
+          if (ctx && ctx.waitUntil) ctx.waitUntil(put); else await put;
+        } catch { /* 缓存写入失败不影响返回 */ }
+      }
+      return resp;
+    }
+  }
+
   return json({ error: '接口不存在', path: '/' + seg.join('/') }, 404);
 }
 
 // ---------------- 入口 ----------------
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const url = new URL(request.url);
 
     if (request.method === 'OPTIONS') {
@@ -278,7 +387,7 @@ export default {
         }
         await ensureSchema(env.DB);
         const seg = url.pathname.slice(4).split('/').filter(Boolean).map(decodeURIComponent);
-        return await handleApi(request, env, seg);
+        return await handleApi(request, env, seg, ctx);
       } catch (e) {
         return json({ error: '服务器内部错误：' + String(e && e.message || e) }, 500);
       }
