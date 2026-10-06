@@ -49,11 +49,12 @@ async function ensureSchema(DB) {
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
   )`).bind().run();
-  // 图片表：二进制直接存 D1（免配置对象存储），article_slug 用于条目删除时级联清理
+  // 图片表：以 base64 文本存 D1（TEXT 绑定在 D1 各版本行为一致，比二进制绑定可靠；
+  // 体积多 33%，但省去了对象存储配置）。article_slug 用于条目删除时级联清理
   await DB.prepare(`CREATE TABLE IF NOT EXISTS images (
     id TEXT PRIMARY KEY,
     mime TEXT NOT NULL,
-    bytes BLOB NOT NULL,
+    bytes TEXT NOT NULL,
     size INTEGER NOT NULL,
     article_slug TEXT,
     ts INTEGER NOT NULL
@@ -144,7 +145,24 @@ const SEED_ARTICLES = [
   },
 ];
 
-// ---------------- 图片辅助：引用提取 / 孤儿清理 ----------------
+// ---------------- 图片辅助：base64 编解码 / 引用提取 / 孤儿清理 ----------------
+function arrayBufferToBase64(buf) {
+  const bytes = buf instanceof Uint8Array ? buf : new Uint8Array(buf);
+  const CHUNK = 0x8000; // 分块转换，避免大文件时调用栈溢出
+  let out = '';
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    out += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK));
+  }
+  return btoa(out);
+}
+
+function base64ToArrayBuffer(b64) {
+  const bin = atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out.buffer;
+}
+
 function extractImageIds(content) {
   const set = new Set();
   const re = /\/api\/images\/([A-Za-z0-9_-]+)/g;
@@ -321,7 +339,9 @@ async function handleApi(request, env, seg, ctx) {
       const ALLOWED = { 'image/jpeg': 1, 'image/png': 1, 'image/webp': 1, 'image/gif': 1 };
       if (!ALLOWED[file.type]) return json({ error: '仅支持 JPG / PNG / WebP / GIF 图片' }, 415);
       if (file.size > 1_800_000) return json({ error: '图片超过 1.5MB（客户端压缩失败或原图过大），请换小一点的图' }, 413);
-      const buf = new Uint8Array(await file.arrayBuffer());
+      const raw = await file.arrayBuffer();
+      if (!raw || !raw.byteLength) return json({ error: '图片内容为空，请重试' }, 400);
+      const b64 = arrayBufferToBase64(raw);
       let id = '';
       for (let i = 0; i < 5 && !id; i++) {
         const candidate = Math.random().toString(36).slice(2, 8) + Date.now().toString(36).slice(-4);
@@ -330,8 +350,8 @@ async function handleApi(request, env, seg, ctx) {
       }
       if (!id) return json({ error: '生成图片编号失败，请重试' }, 500);
       await DB.prepare('INSERT INTO images (id, mime, bytes, size, article_slug, ts) VALUES (?,?,?,?,NULL,?)')
-        .bind(id, file.type, buf, file.size, Date.now()).run();
-      return json({ ok: true, id, url: '/api/images/' + id, mime: file.type, size: file.size }, 201);
+        .bind(id, file.type, b64, raw.byteLength, Date.now()).run();
+      return json({ ok: true, id, url: '/api/images/' + id, mime: file.type, size: raw.byteLength }, 201);
     }
 
     // 读取：先查边缘缓存，再查数据库（id 唯一 → 浏览器与边缘均可永久缓存）
@@ -348,7 +368,13 @@ async function handleApi(request, env, seg, ctx) {
       }
       const r = await DB.prepare('SELECT mime, bytes FROM images WHERE id = ?').bind(id).first();
       if (!r || !r.bytes) return json({ error: '图片不存在' }, 404);
-      const resp = new Response(r.bytes, {
+      // 新数据是 base64 文本；旧数据（若有）是二进制，两者都兼容
+      let body = r.bytes;
+      if (typeof body === 'string') {
+        try { body = base64ToArrayBuffer(body); } catch { return json({ error: '图片数据损坏' }, 500); }
+      }
+      if (!body || !body.byteLength) return json({ error: '图片数据为空' }, 404);
+      const resp = new Response(body, {
         status: 200,
         headers: {
           'Content-Type': r.mime || 'application/octet-stream',
