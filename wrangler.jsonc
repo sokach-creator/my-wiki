@@ -13,7 +13,7 @@
   // 获取方法：Cloudflare 后台 → 存储和数据库 → D1 SQL 数据库 → 打开 wiki-db → 复制「数据库 ID」
   "d1_databases": [
     {
-      "binding": "db",
+      "binding": "DB",
       "database_name": "wiki-db",
       "database_id": "cc6c0e1f-d429-408d-91ce-a0534b5159c4"
     }
