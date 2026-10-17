@@ -5,6 +5,10 @@
 const SITE_NAME = '我的百科档案馆';
 const SITE_TAGLINE = '记录一切 · 分享所学';
 const SITE_NOTICE = '本站为简易百科，任何人都可以直接创建和编辑条目，无需注册登录。';
+// 站长改这里：友链列表（「友链」页展示，想加新友链就照格式加一行）
+const SITE_FRIENDS = [
+  { name: 'Sokach 的博客', url: 'https://sokach.niuma.club', desc: '把日子过成诗，把代码写成歌。' },
+];
 
 document.title = SITE_NAME;
 document.getElementById('siteName').textContent = SITE_NAME;
@@ -624,6 +628,26 @@ async function viewEditor(slug, presetQuery) {
   }
 }
 
+// ---------------- 友链页 ----------------
+async function viewFriends() {
+  $app.innerHTML =
+    '<h1 class="page-title">友情链接</h1>' +
+    '<p class="page-sub">常去的好站 · 想交换友链请联系站长</p>' +
+    '<div class="friends-grid">' +
+      SITE_FRIENDS.map((f) =>
+        '<a class="friend-card" href="' + esc(f.url) + '" target="_blank" rel="noopener noreferrer">' +
+          '<span class="friend-avatar">' + esc((f.name || '?').charAt(0)) + '</span>' +
+          '<span class="friend-info">' +
+            '<b>' + esc(f.name) + '</b>' +
+            '<span class="friend-desc">' + esc(f.desc || '') + '</span>' +
+            '<span class="friend-url">' + esc(f.url.replace(/^https?:\/\//, '').replace(/\/$/, '')) + '</span>' +
+          '</span>' +
+        '</a>').join('') +
+      (SITE_FRIENDS.length ? '' : '<div class="empty-tip" style="grid-column:1/-1">还没有友链，去 app.js 顶部的 SITE_FRIENDS 里添加吧</div>') +
+    '</div>';
+  document.title = '友情链接 - ' + SITE_NAME;
+}
+
 // ---------------- 路由 ----------------
 function parseHash() {
   const h = location.hash.replace(/^#/, '') || '/';
@@ -646,6 +670,7 @@ async function render() {
     if (seg[0] === 'article' && seg[1]) return await viewArticle(decodeURIComponent(seg[1]));
     if (seg[0] === 'search') return await viewSearch(params.get('q') || '');
     if (seg[0] === 'random') return await viewRandom();
+    if (seg[0] === 'links') return await viewFriends();
     $app.innerHTML = '<div class="card"><h1 class="page-title">页面不存在</h1><p style="margin:14px 0">你要找的页面不存在。</p><a class="btn btn-primary" href="#/">返回首页</a></div>';
   } catch (e) {
     $app.innerHTML = '<div class="card"><h1 class="page-title">出错了</h1><p style="margin:14px 0">' +

@@ -1,4 +1,4 @@
-﻿{
+{
   // ★ 项目名：必须和 Cloudflare 上的项目名一致（日志里显示的是 my-wiki）
   "name": "my-wiki",
   "compatibility_date": "2026-10-01",
@@ -15,7 +15,7 @@
     {
       "binding": "DB",
       "database_name": "wiki-db",
-      "database_id": "cc6c0e1f-d429-408d-91ce-a0534b5159c4"
+      "database_id": "在这里粘贴你的数据库ID"
     }
   ]
 }

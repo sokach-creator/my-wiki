@@ -390,6 +390,48 @@ a.wiki-link.new { color: #ba2200; }
   box-shadow: 0 12px 48px rgba(0,0,0,.55);
 }
 
+/* ---------- 友链 ---------- */
+.friends-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 16px;
+  margin-top: 16px;
+}
+.friend-card {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 18px 20px;
+  text-decoration: none;
+  color: var(--text);
+  box-shadow: 0 1px 3px rgba(0,0,0,.06);
+  transition: transform .15s ease, box-shadow .15s ease, border-color .15s ease;
+}
+.friend-card:hover {
+  transform: translateY(-2px);
+  border-color: var(--header-hi);
+  box-shadow: 0 4px 12px rgba(90,20,20,.14);
+}
+.friend-avatar {
+  flex: none;
+  width: 52px; height: 52px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--header-hi), var(--accent));
+  color: #f5e9d0;
+  font-size: 22px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.friend-info { display: flex; flex-direction: column; min-width: 0; }
+.friend-info b { font-size: 16px; color: var(--header-hi); }
+.friend-desc { font-size: 13px; color: var(--muted); margin-top: 2px; }
+.friend-url { font-size: 12px; color: #a83232; margin-top: 3px; word-break: break-all; }
+
 /* ---------- 响应式 ---------- */
 @media (max-width: 860px) {
   .header-inner { gap: 10px; }
